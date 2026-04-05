@@ -45,6 +45,26 @@ def _build_error_details(result: dict) -> dict[str, Any] | None {
     return details if details else None;
 }
 
+"""Build transport meta.extra for execution responses."""
+def _build_execution_meta_extra(
+    http_status: int, result: dict[(str, Any)] | None = None
+) -> dict[str, Any] {
+    extra = {"http_status": http_status};
+    if result and result.get("llm_trace_ids") {
+        extra["llm_trace_ids"] = result["llm_trace_ids"];
+    }
+    return extra;
+}
+
+"""Strip internal trace metadata from result bodies returned to clients."""
+def _build_response_data(result: dict[(str, Any)]) -> dict[(str, Any)] {
+    response_data = dict(result);
+    if "llm_trace_ids" in response_data {
+        del response_data["llm_trace_ids"];
+    }
+    return response_data;
+}
+
 impl JacAPIServerEndpoints.register_walkers_endpoints -> None {
     for walker_name in self.get_walkers() {
         # Skip walkers configured for webhook or websocket transport
@@ -201,12 +221,13 @@ impl JacAPIServerEndpoints.create_walker_callback(
                 meta=Meta(
                     request_id=result.get("request_id"),
                     trace_id=result.get("trace_id"),
-                    extra={'http_status': 500}
+                    extra=_build_execution_meta_extra(500, result)
                 )
             );
         }
         return TransportResponse.success(
-            data=result, meta=Meta(extra={'http_status': 200})
+            data=_build_response_data(result),
+            meta=Meta(extra=_build_execution_meta_extra(200, result))
         );
     }
     return callback;
@@ -344,12 +365,13 @@ impl JacAPIServerEndpoints.create_function_callback(
                 meta=Meta(
                     request_id=result.get("request_id"),
                     trace_id=result.get("trace_id"),
-                    extra={'http_status': 500}
+                    extra=_build_execution_meta_extra(500, result)
                 )
             );
         }
         return TransportResponse.success(
-            data=result, meta=Meta(extra={'http_status': 200})
+            data=_build_response_data(result),
+            meta=Meta(extra=_build_execution_meta_extra(200, result))
         );
     }
     return callback;

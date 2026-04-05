@@ -37,6 +37,23 @@ impl Model.invoke(mt_run: MTRuntime) -> object {
     import time;
 
     mt_run._invocation_id = str(uuid.uuid4());
+    try {
+        import from jaclang { JacRuntime as Jac }
+        ctx = Jac.get_context();
+        call_state = ctx.call_state.get(None);
+        if call_state {
+            seen = False;
+            for trace_id in call_state.llm_trace_ids {
+                if trace_id == mt_run._invocation_id {
+                    seen = True;
+                }
+            }
+            if not seen {
+                call_state.llm_trace_ids.append(mt_run._invocation_id);
+            }
+        }
+    } except Exception {
+    }
     _start = time.time();
 
     try {

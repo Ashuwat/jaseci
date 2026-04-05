@@ -200,6 +200,20 @@ impl ExecutionManager.report_collector(call_state: CallState) -> dict[str, JsonV
     }
 }
 
+"""Collect unique LLM trace IDs captured during a request."""
+def _collect_llm_trace_ids(call_state: CallState | None) -> list[str] {
+    trace_ids: list[str] = [];
+    if not call_state {
+        return trace_ids;
+    }
+    for trace_id in call_state.llm_trace_ids {
+        if trace_id and trace_id not in trace_ids {
+            trace_ids.append(trace_id);
+        }
+    }
+    return trace_ids;
+}
+
 """Build a normalized traced error result for execution surfaces."""
 def _make_traced_error_result(
     phase: str,
@@ -307,14 +321,19 @@ impl ExecutionManager.execute_function(
         if isgenerator(reports) or isinstance(reports, AsyncGenerator) {
             return reports;
         } else {
-            return {
+            result_payload = {
                 'result': Serializer.serialize(result, api_mode=True),
                 'reports': Serializer.serialize(reports, api_mode=True)
             };
+            llm_trace_ids = _collect_llm_trace_ids(call_state);
+            if llm_trace_ids {
+                result_payload["llm_trace_ids"] = llm_trace_ids;
+            }
+            return result_payload;
         }
     } except Exception as e {
         import traceback;
-        return _make_traced_error_result(
+        error_result = _make_traced_error_result(
             phase="execute_function",
             target=getattr(func, "__name__", "unknown"),
             caller_name=getattr(func, "__name__", "unknown"),
@@ -325,6 +344,11 @@ impl ExecutionManager.execute_function(
             trace_context=trace_context,
             payload=args
         );
+        llm_trace_ids = _collect_llm_trace_ids(call_state);
+        if llm_trace_ids {
+            error_result["llm_trace_ids"] = llm_trace_ids;
+        }
+        return error_result;
     } finally {
         ctx.call_state.reset(call_token);
     }
@@ -403,14 +427,19 @@ impl ExecutionManager.spawn_walker(
         if isgenerator(reports) or isinstance(reports, AsyncGenerator) {
             return reports;
         } else {
-            return {
+            result_payload = {
                 'result': Serializer.serialize(result, api_mode=True),
                 'reports': Serializer.serialize(reports, api_mode=True)
             };
+            llm_trace_ids = _collect_llm_trace_ids(call_state);
+            if llm_trace_ids {
+                result_payload["llm_trace_ids"] = llm_trace_ids;
+            }
+            return result_payload;
         }
     } except Exception as e {
         import traceback;
-        return _make_traced_error_result(
+        error_result = _make_traced_error_result(
             phase="spawn_walker",
             target=getattr(walker_cls, "__name__", "unknown"),
             caller_name=getattr(walker_cls, "__name__", "unknown"),
@@ -421,6 +450,11 @@ impl ExecutionManager.spawn_walker(
             trace_context=trace_context,
             payload=fields
         );
+        llm_trace_ids = _collect_llm_trace_ids(call_state);
+        if llm_trace_ids {
+            error_result["llm_trace_ids"] = llm_trace_ids;
+        }
+        return error_result;
     } finally {
         ctx.call_state.reset(call_token);
     }

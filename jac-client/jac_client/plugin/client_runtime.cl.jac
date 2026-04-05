@@ -62,9 +62,25 @@ def:pub __recordDebugEvent(
     stack: str = "",
     details: dict = {}
 ) -> None;
+def:pub __recordLlmTraceEvent(trace: dict, source: str = "llm.trace") -> None;
+async def:pub __fetchLlmTraceDetail(
+    invocation_id: str, source: str = "llm.trace"
+) -> None;
+def:pub __extractLlmTraceIds(payload: dict) -> list;
+async def:pub __maybeLoadLlmTraces(
+    payload: dict, source: str = "llm.trace"
+) -> None;
 def:pub __installDebugConsoleHooks -> None;
 def:pub __getDebugSnapshot -> dict;
+def:pub __clearDebugEvents -> None;
 def:pub __renderDebugEvent(event: dict) -> JsxElement;
+def:pub __renderDebugEventListItem(
+    event: dict, is_selected: bool = False, on_select: Any = None
+) -> JsxElement;
+def:pub __renderDebugEventDetail(
+    event: dict, trace_enabled: bool = False
+) -> JsxElement;
+def:pub __renderDebugLlmTraceDetail(event: dict) -> JsxElement;
 def:pub __getLocalStorage(key: str) -> str;
 def:pub __setLocalStorage(key: str, value: str) -> None;
 def:pub __removeLocalStorage(key: str) -> None;

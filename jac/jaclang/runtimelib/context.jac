@@ -15,7 +15,8 @@ glob __all__ = ['ExecutionContext'];
 """Call State for managing function, spawn calls."""
 obj CallState {
     has reports: Queue = Queue(),
-        _sentinel: object = object();
+        _sentinel: object = object(),
+        llm_trace_ids: list[str] = [];
 }
 
 """Execution Context.

@@ -20,6 +20,16 @@ import json as json_module;
 glob logger = logging.getLogger(__name__);
 
 
+def _llm_debug_ui_enabled -> bool {
+    import os;
+    import from jaclang.runtimelib.error_trace { is_error_tracing_enabled }
+    return bool(
+        is_error_tracing_enabled()
+        or os.environ.get("JAC_DEBUG_UI", "").lower() in ("1", "true", "yes", "on")
+    );
+}
+
+
 obj LLMCallRecord {
     """Record for a single LLM API call within an agent invocation."""
     has call_id: str | None = None,
@@ -680,6 +690,48 @@ impl JacAPIServerLLMTelemetry.register_llm_telemetry_endpoints -> None {
             tags=["LLM Telemetry"],
             summary="LLM Telemetry Trace Detail",
             description="Full detail of a single agent invocation trace including conversation history and per-LLM-call breakdown."
+        )
+    );
+
+    # GET /debug/llm/telemetry/traces/{invocation_id}
+    async def debug_trace_detail_handler(
+        request: Request, invocation_id: str
+    ) -> JSONResponse {
+        if not _llm_debug_ui_enabled() {
+            return JSONResponse(
+                status_code=404,
+                content={"ok": False, "error": {"message": "Trace debugger disabled"}}
+            );
+        }
+        data = store.get_trace(invocation_id);
+        if data is None {
+            return JSONResponse(
+                status_code=404,
+                content={"ok": False, "error": {"message": "Trace not found"}}
+            );
+        }
+        return JSONResponse(content={"ok": True, "data": data});
+    }
+
+    self.server.add_endpoint(
+        JEndPoint(
+            method=HTTPMethod.GET,
+            path="/debug/llm/telemetry/traces/{invocation_id}",
+            callback=debug_trace_detail_handler,
+            parameters=[
+                APIParameter(
+                    name="invocation_id",
+                    data_type="string",
+                    required=True,
+                    default=None,
+                    description="The invocation ID of the trace",
+                    type=ParameterType.PATH
+                )
+            ],
+            response_model=None,
+            tags=["LLM Telemetry"],
+            summary="Debug LLM Trace Detail",
+            description="Debug-only trace detail endpoint for in-app trace inspection when trace errors or debug UI is enabled."
         )
     );
 
