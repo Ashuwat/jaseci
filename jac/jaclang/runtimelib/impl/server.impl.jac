@@ -200,13 +200,79 @@ impl ExecutionManager.report_collector(call_state: CallState) -> dict[str, JsonV
     }
 }
 
+"""Build a normalized traced error result for execution surfaces."""
+def _make_traced_error_result(
+    phase: str,
+    target: str,
+    caller_name: str,
+    username: str,
+    exc: Exception | None = None,
+    message: str = "",
+    stack_trace: str = "",
+    module_name: str = "",
+    trace_context: dict[(str, Any)] | None = None,
+    payload: dict[(str, Any)] | None = None
+) -> dict[str, JsonValue] {
+    result = {"error": (message or str(exc or ""))[:2000]};
+    if stack_trace {
+        result["traceback"] = stack_trace;
+    }
+    import from jaclang.runtimelib.error_trace {
+        capture_error_trace,
+        is_error_tracing_enabled
+    }
+    if not is_error_tracing_enabled() {
+        return result;
+    }
+    ctx = dict(trace_context or {});
+    if payload {
+        ctx["payload"] = payload;
+    }
+    event = capture_error_trace(
+        surface="runtime",
+        phase=phase,
+        exc=exc,
+        message=message,
+        stack_trace=stack_trace,
+        module=module_name,
+        target=target,
+        caller_name=caller_name,
+        username=username,
+        request_id=ctx.get("request_id"),
+        trace_id=ctx.get("trace_id"),
+        context=ctx
+    );
+    if event {
+        result["error_id"] = event.error_id;
+        result["trace_id"] = event.trace_id;
+        if event.request_id {
+            result["request_id"] = event.request_id;
+        }
+        if event.stack_trace and "traceback" not in result {
+            result["traceback"] = event.stack_trace;
+        }
+    }
+    return result;
+}
+
 """Execute a function in user's context."""
 impl ExecutionManager.execute_function(
-    func: Callable[(..., Any)], args: dict[(str, Any)], username: str
+    func: Callable[(..., Any)],
+    args: dict[(str, Any)],
+    username: str,
+    trace_context: dict[(str, Any)] | None = None
 ) -> dict[str, JsonValue] {
     root_id = self.user_manager.get_root_id(username);
     if not root_id {
-        return {'error': 'User not found'};
+        return _make_traced_error_result(
+            phase="execute_function",
+            target=getattr(func, "__name__", "unknown"),
+            caller_name=getattr(func, "__name__", "unknown"),
+            username=username,
+            message="User not found",
+            module_name=getattr(func, "__module__", ""),
+            trace_context=trace_context
+        );
     }
     # Set user context for permission checks and ownership
     ctx = Jac.get_context();
@@ -247,7 +313,18 @@ impl ExecutionManager.execute_function(
             };
         }
     } except Exception as e {
-        return {'error': str(e)};
+        import traceback;
+        return _make_traced_error_result(
+            phase="execute_function",
+            target=getattr(func, "__name__", "unknown"),
+            caller_name=getattr(func, "__name__", "unknown"),
+            username=username,
+            exc=e,
+            stack_trace=traceback.format_exc(),
+            module_name=getattr(func, "__module__", ""),
+            trace_context=trace_context,
+            payload=args
+        );
     } finally {
         ctx.call_state.reset(call_token);
     }
@@ -255,12 +332,23 @@ impl ExecutionManager.execute_function(
 
 """Spawn a walker in user's context."""
 impl ExecutionManager.spawn_walker(
-    walker_cls: type[WalkerArchetype], fields: dict[(str, Any)], username: str
+    walker_cls: type[WalkerArchetype],
+    fields: dict[(str, Any)],
+    username: str,
+    trace_context: dict[(str, Any)] | None = None
 ) -> dict[str, JsonValue] {
     import from jaclang.jac0core.constructs { NodeArchetype }
     root_id = self.user_manager.get_root_id(username);
     if not root_id {
-        return {'error': 'User not found'};
+        return _make_traced_error_result(
+            phase="spawn_walker",
+            target=getattr(walker_cls, "__name__", "unknown"),
+            caller_name=getattr(walker_cls, "__name__", "unknown"),
+            username=username,
+            message="User not found",
+            module_name=getattr(walker_cls, "__module__", ""),
+            trace_context=trace_context
+        );
     }
     target_node_id = fields.pop('_jac_spawn_node', None);
     # Deserialize typed walker fields from wire format
@@ -288,7 +376,16 @@ impl ExecutionManager.spawn_walker(
         if target_node_id {
             target_node = Jac.get_object(target_node_id);
             if not isinstance(target_node, NodeArchetype) {
-                return {'error': f"Invalid target node: {target_node_id}"};
+                return _make_traced_error_result(
+                    phase="spawn_walker",
+                    target=getattr(walker_cls, "__name__", "unknown"),
+                    caller_name=getattr(walker_cls, "__name__", "unknown"),
+                    username=username,
+                    message=f"Invalid target node: {target_node_id}",
+                    module_name=getattr(walker_cls, "__module__", ""),
+                    trace_context=trace_context,
+                    payload=fields
+                );
             }
         } else {
             target_node = ctx.get_root();
@@ -313,10 +410,39 @@ impl ExecutionManager.spawn_walker(
         }
     } except Exception as e {
         import traceback;
-        return {'error': str(e), 'traceback': traceback.format_exc()};
+        return _make_traced_error_result(
+            phase="spawn_walker",
+            target=getattr(walker_cls, "__name__", "unknown"),
+            caller_name=getattr(walker_cls, "__name__", "unknown"),
+            username=username,
+            exc=e,
+            stack_trace=traceback.format_exc(),
+            module_name=getattr(walker_cls, "__module__", ""),
+            trace_context=trace_context,
+            payload=fields
+        );
     } finally {
         ctx.call_state.reset(call_token);
     }
+}
+
+"""Build transport-level error details from a traced execution result."""
+def _transport_error_details(result: dict[str, Any]) -> dict[str, Any] | None {
+    import from jaclang.runtimelib.error_trace { is_error_tracing_enabled }
+    details: dict[str, Any] = {};
+    if result.get("error_id") {
+        details["error_id"] = result["error_id"];
+    }
+    if result.get("trace_id") {
+        details["trace_id"] = result["trace_id"];
+    }
+    if result.get("request_id") {
+        details["request_id"] = result["request_id"];
+    }
+    if is_error_tracing_enabled() and result.get("traceback") {
+        details["traceback"] = result["traceback"];
+    }
+    return details if details else None;
 }
 
 impl ModuleIntrospector.postinit -> None {
@@ -1191,6 +1317,18 @@ impl ExecutionHandler.call_function(
     result = await self.execution_manager.execute_function(
         functions[name], args, username
     );
+    if isinstance(result, dict) and "error" in result {
+        return TransportResponse.fail(
+            code='EXECUTION_ERROR',
+            message=result.get('error', 'Function execution failed'),
+            details=_transport_error_details(result),
+            meta=Meta(
+                request_id=result.get("request_id"),
+                trace_id=result.get("trace_id"),
+                extra={'http_status': 500}
+            )
+        );
+    }
     return TransportResponse.success(
         data=result, meta=Meta(extra={'http_status': 200})
     );
@@ -1210,6 +1348,18 @@ impl ExecutionHandler.spawn_walker(
         );
     }
     result = await self.execution_manager.spawn_walker(walkers[name], fields, username);
+    if isinstance(result, dict) and "error" in result {
+        return TransportResponse.fail(
+            code='EXECUTION_ERROR',
+            message=result.get('error', 'Walker execution failed'),
+            details=_transport_error_details(result),
+            meta=Meta(
+                request_id=result.get("request_id"),
+                trace_id=result.get("trace_id"),
+                extra={'http_status': 500}
+            )
+        );
+    }
     return TransportResponse.success(
         data=result, meta=Meta(extra={'http_status': 200})
     );

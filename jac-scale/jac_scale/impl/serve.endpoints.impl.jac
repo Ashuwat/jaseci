@@ -1,4 +1,50 @@
 """Walker, function, webhook, WebSocket endpoint implementations."""
+def _build_trace_context(
+    request: Request,
+    phase: str,
+    target: str,
+    caller_name: str,
+    username: str | None = None,
+    payload: dict[(str, Any)] | None = None
+) -> dict[str, Any] {
+    import uuid;
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4());
+    trace_id = request.headers.get("X-Trace-ID") or request_id;
+    context = {
+        "request_id": request_id,
+        "trace_id": trace_id,
+        "method": request.method,
+        "path": request.url.path,
+        "phase": phase,
+        "target": target,
+        "caller_name": caller_name,
+        "username": username
+    };
+    if payload {
+        context["payload"] = payload;
+    }
+    return context;
+}
+
+"""Build response details for an execution failure."""
+def _build_error_details(result: dict) -> dict[str, Any] | None {
+    import from jaclang.runtimelib.error_trace { is_error_tracing_enabled }
+    details: dict[str, Any] = {};
+    if result.get("error_id") {
+        details["error_id"] = result["error_id"];
+    }
+    if result.get("trace_id") {
+        details["trace_id"] = result["trace_id"];
+    }
+    if result.get("request_id") {
+        details["request_id"] = result["request_id"];
+    }
+    if is_error_tracing_enabled() and result.get("traceback") {
+        details["traceback"] = result["traceback"];
+    }
+    return details if details else None;
+}
+
 impl JacAPIServerEndpoints.register_walkers_endpoints -> None {
     for walker_name in self.get_walkers() {
         # Skip walkers configured for webhook or websocket transport
@@ -122,8 +168,19 @@ impl JacAPIServerEndpoints.create_walker_callback(
         if nd {
             kwargs['_jac_spawn_node'] = nd;
         }
+        trace_context = _build_trace_context(
+            request,
+            "spawn_walker",
+            walker_name,
+            walker_name,
+            (username or Con.GUEST.value),
+            kwargs
+        );
         result = await self.execution_manager.spawn_walker(
-            self.get_walkers()[walker_name], kwargs, (username or Con.GUEST.value)
+            self.get_walkers()[walker_name],
+            kwargs,
+            (username or Con.GUEST.value),
+            trace_context
         );
         if (isgenerator(result) or isinstance(result, AsyncGenerator)) {
             return StreamingResponse(
@@ -140,8 +197,12 @@ impl JacAPIServerEndpoints.create_walker_callback(
             return TransportResponse.fail(
                 code='EXECUTION_ERROR',
                 message=result.get('error', 'Walker execution failed'),
-                details=result.get('traceback') if 'traceback' in result else None,
-                meta=Meta(extra={'http_status': 500})
+                details=_build_error_details(result),
+                meta=Meta(
+                    request_id=result.get("request_id"),
+                    trace_id=result.get("trace_id"),
+                    extra={'http_status': 500}
+                )
             );
         }
         return TransportResponse.success(
@@ -248,9 +309,20 @@ impl JacAPIServerEndpoints.create_function_callback(
                 );
             }
         }
-        console.print(f"Executing function '{func_name}' with params: {kwargs}");
+        console.print(f"Executing function '{func_name}'");
+        trace_context = _build_trace_context(
+            request,
+            "execute_function",
+            func_name,
+            func_name,
+            (username or Con.GUEST.value),
+            kwargs
+        );
         result = await self.execution_manager.execute_function(
-            self.get_functions()[func_name], kwargs, (username or Con.GUEST.value)
+            self.get_functions()[func_name],
+            kwargs,
+            (username or Con.GUEST.value),
+            trace_context
         );
         # Handle streaming responses (generators/async generators)
         if (isgenerator(result) or isinstance(result, AsyncGenerator)) {
@@ -268,8 +340,12 @@ impl JacAPIServerEndpoints.create_function_callback(
             return TransportResponse.fail(
                 code='EXECUTION_ERROR',
                 message=result.get('error', 'Function execution failed'),
-                details=result.get('traceback') if 'traceback' in result else None,
-                meta=Meta(extra={'http_status': 500})
+                details=_build_error_details(result),
+                meta=Meta(
+                    request_id=result.get("request_id"),
+                    trace_id=result.get("trace_id"),
+                    extra={'http_status': 500}
+                )
             );
         }
         return TransportResponse.success(
@@ -357,18 +433,30 @@ impl JacAPIServerEndpoints.create_webhook_callback(
         }
 
         walker_kwargs: dict[str, Any] = dict(body_data) if body_data else {};
+        trace_context = _build_trace_context(
+            request,
+            "webhook_spawn_walker",
+            walker_name,
+            walker_name,
+            username,
+            walker_kwargs
+        );
 
         # Execute the walker
         result = await self.execution_manager.spawn_walker(
-            self.get_walkers()[walker_name], walker_kwargs, username
+            self.get_walkers()[walker_name], walker_kwargs, username, trace_context
         );
 
         if 'error' in result {
             return TransportResponse.fail(
                 code='EXECUTION_ERROR',
                 message=result.get('error', 'Walker execution failed'),
-                details=result.get('traceback') if 'traceback' in result else None,
-                meta=Meta(extra={'http_status': 500})
+                details=_build_error_details(result),
+                meta=Meta(
+                    request_id=result.get("request_id"),
+                    trace_id=result.get("trace_id"),
+                    extra={'http_status': 500}
+                )
             );
         }
 
@@ -504,10 +592,26 @@ impl JacAPIServerEndpoints.create_websocket_handler(walker_name: str) -> Callabl
 
                 # Spawn the walker with received fields
                 try {
+                    trace_context = {
+                        "request_id": websocket.query_params.get("request_id")
+                        or websocket.query_params.get("trace_id")
+                        or walker_name,
+                        "trace_id": websocket.query_params.get("trace_id")
+                        or websocket.query_params.get("request_id")
+                        or walker_name,
+                        "method": "WEBSOCKET",
+                        "path": f"/ws/{walker_name}",
+                        "phase": "websocket_spawn_walker",
+                        "target": walker_name,
+                        "caller_name": walker_name,
+                        "username": (username or Con.GUEST.value),
+                        "payload": data
+                    };
                     result = await self.execution_manager.spawn_walker(
                         self.get_walkers()[walker_name],
                         data,
-                        (username or Con.GUEST.value)
+                        (username or Con.GUEST.value),
+                        trace_context
                     );
                     if isinstance(result, dict) and 'error' in result {
                         # Errors always go only to sender
@@ -518,7 +622,12 @@ impl JacAPIServerEndpoints.create_websocket_handler(walker_name: str) -> Callabl
                                     'code': 'EXECUTION_ERROR',
                                     'message': result.get(
                                         'error', 'Walker execution failed'
-                                    )
+                                    ),
+                                    'details': _build_error_details(result)
+                                },
+                                'meta': {
+                                    'request_id': result.get("request_id"),
+                                    'trace_id': result.get("trace_id")
                                 }
                             }
                         );

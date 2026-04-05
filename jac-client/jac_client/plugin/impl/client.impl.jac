@@ -153,12 +153,24 @@ impl JacClient.render_page(
     </script>''';
     }
     # Build __jac_init__ JSON with endpoint effects for client-side auto-caching
+    import os;
+    import from jaclang.runtimelib.error_trace { is_error_tracing_enabled }
+    debug_feature_enabled = os.environ.get("JAC_DEBUG_UI", "").lower() in (
+        "1", "true", "yes", "on"
+    );
     init_data = {
         'module': introspector._module.__name__
             if introspector._module
             else introspector.module_name,
         'function': function_name,
-        'endpointEffects': introspector._client_manifest.get('endpoint_effects', {})
+        'endpointEffects': introspector._client_manifest.get('endpoint_effects', {}),
+        'debugUi': {
+            'enabled': bool(
+                is_error_tracing_enabled() or debug_feature_enabled
+            ),
+            'traceErrors': bool(is_error_tracing_enabled()),
+            'featureFlag': bool(debug_feature_enabled)
+        }
     };
     init_json = json.dumps(init_data).replace('</', '<\\/');
     init_script = f'<script id="__jac_init__" type="application/json">{init_json}</script>';

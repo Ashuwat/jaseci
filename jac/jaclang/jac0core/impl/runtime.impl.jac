@@ -1740,6 +1740,8 @@ impl JacAPIServer.render_page(
     args: dict[(str, Any)],
     username: str
 ) -> dict[(str, Any)] {
+    import os;
+    import from jaclang.runtimelib.error_trace { is_error_tracing_enabled }
     import from jaclang.runtimelib.serializer { Serializer }
     introspector.load();
     available_exports = (
@@ -1768,7 +1770,19 @@ impl JacAPIServer.render_page(
         },
         'globals': globals_payload,
         'argOrder': arg_order,
-        'endpointEffects': introspector._client_manifest.get('endpoint_effects', {})
+        'endpointEffects': introspector._client_manifest.get('endpoint_effects', {}),
+        'debugUi': {
+            'enabled': bool(
+                is_error_tracing_enabled()
+                or os.environ.get("JAC_DEBUG_UI", "").lower()
+                in ("1", "true", "yes", "on")
+            ),
+            'traceErrors': bool(is_error_tracing_enabled()),
+            'featureFlag': bool(
+                os.environ.get("JAC_DEBUG_UI", "").lower()
+                in ("1", "true", "yes", "on")
+            )
+        }
     };
     safe_initial_json = json.dumps(initial_state).replace('</', '<\\/');
     page = f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>{html.escape(

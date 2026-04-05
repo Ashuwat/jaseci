@@ -77,7 +77,7 @@ impl ViteCompiler.create_entry_file(self: ViteCompiler, module_path: Path) -> No
     } else {
         # Explicit routing mode: import app from entry module (original behavior)
         app_module_name = module_path.stem;
-        entry_content = f'import React from "react";\nimport {{ createRoot }} from "react-dom/client";\nimport {{ app as App }} from "./{app_module_name}.js";\nimport {{ JacClientErrorBoundary, ErrorFallback, __jacInstallErrorHandlers }} from "@jac/runtime";\n\n__jacInstallErrorHandlers();\nconst root = createRoot(document.getElementById("root"));\nroot.render(\n\tReact.createElement(\n\t\tJacClientErrorBoundary,{{ FallbackComponent: ErrorFallback }},\n\t\tReact.createElement(App, null)\n\t)\n);\n';
+        entry_content = f'import React from "react";\nimport {{ createRoot }} from "react-dom/client";\nimport {{ app as App }} from "./{app_module_name}.js";\nimport {{ JacClientErrorBoundary, ErrorFallback, JacDebugWidget, jacShouldShowDebugUi, __jacInstallErrorHandlers }} from "@jac/runtime";\n\n__jacInstallErrorHandlers();\nconst root = createRoot(document.getElementById("root"));\nconst appElement = React.createElement(\n\tJacClientErrorBoundary,{{ FallbackComponent: ErrorFallback }},\n\tReact.createElement(App, null)\n);\nconst debugElement = jacShouldShowDebugUi() ? React.createElement(JacDebugWidget, null) : null;\nroot.render(\n\tReact.createElement(React.Fragment, null, appElement, debugElement)\n);\n';
     }
     entry_file.write_text(entry_content, encoding='utf-8');
 }
@@ -106,7 +106,7 @@ impl ViteCompiler._create_pages_entry_content(
     lines.append('import { createRoot } from "react-dom/client";');
     lines.append('import { BrowserRouter, Routes, Route } from "react-router-dom";');
     lines.append(
-        'import { JacClientErrorBoundary, ErrorFallback, AuthGuard, __jacInstallErrorHandlers } from "@jac/runtime";'
+        'import { JacClientErrorBoundary, ErrorFallback, AuthGuard, JacDebugWidget, jacShouldShowDebugUi, __jacInstallErrorHandlers } from "@jac/runtime";'
     );
     lines.append('import { routes, layouts } from "./_routes.js";');
     lines.append('');
@@ -170,9 +170,12 @@ impl ViteCompiler._create_pages_entry_content(
     }
     lines.append('');
     lines.append('const root = createRoot(document.getElementById("root"));');
+    lines.append(
+        'const debugElement = jacShouldShowDebugUi() ? React.createElement(JacDebugWidget, null) : null;'
+    );
     lines.append('root.render(');
     lines.append(
-        '\tReact.createElement(JacClientErrorBoundary, { FallbackComponent: ErrorFallback }, appElement)'
+        '\tReact.createElement(React.Fragment, null, React.createElement(JacClientErrorBoundary, { FallbackComponent: ErrorFallback }, appElement), debugElement)'
     );
     lines.append(');');
     lines.append('');

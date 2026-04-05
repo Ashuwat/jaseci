@@ -47,6 +47,24 @@ async def:pub jacLogin(username: str, password: str) -> bool;
 def:pub jacLogout -> None;
 def:pub jacIsLoggedIn -> bool;
 def:pub __getApiBaseUrl -> str;
+def:pub __getJacInitData -> dict;
+def:pub __getDebugUiConfig -> dict;
+def:pub jacShouldShowDebugUi -> bool;
+def:pub JacDebugWidget() -> JsxElement;
+def:pub __getDebugStore -> dict;
+def:pub __debugValueToString(value: Any) -> str;
+def:pub __debugArgsToMessage(*args: Any) -> str;
+def:pub __notifyDebugStore -> None;
+def:pub __recordDebugEvent(
+    severity: str,
+    source: str,
+    message: str,
+    stack: str = "",
+    details: dict = {}
+) -> None;
+def:pub __installDebugConsoleHooks -> None;
+def:pub __getDebugSnapshot -> dict;
+def:pub __renderDebugEvent(event: dict) -> JsxElement;
 def:pub __getLocalStorage(key: str) -> str;
 def:pub __setLocalStorage(key: str, value: str) -> None;
 def:pub __removeLocalStorage(key: str) -> None;

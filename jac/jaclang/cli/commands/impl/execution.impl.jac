@@ -58,6 +58,41 @@ def _discover_config_from_file(filename: str) -> None {
     }
 }
 
+"""Resolve whether structured error tracing should be enabled for this command."""
+def _resolve_trace_errors(explicit_flag: bool = False) -> bool {
+    import from jaclang.project.config { get_config }
+    cfg = get_config();
+    return bool(explicit_flag or (cfg.run.trace_errors if cfg else False));
+}
+
+"""Configure process-wide structured error tracing."""
+def _configure_error_tracing(enabled: bool) -> None {
+    import os;
+    import from jaclang.runtimelib.error_trace { configure_error_tracing }
+    configure_error_tracing(
+        enabled=enabled,
+        emit_stderr=enabled,
+        file_path=os.environ.get("JAC_ERROR_TRACE_FILE", ""),
+        store_limit=int(os.environ.get("JAC_ERROR_TRACE_MAX", "1000"))
+    );
+}
+
+"""Emit a structured CLI error trace if tracing is enabled."""
+def _trace_cli_exception(
+    command: str, target: str, exc: Exception, context: dict[str, Any] | None = None
+) -> None {
+    import from jaclang.runtimelib.error_trace { capture_error_trace }
+    capture_error_trace(
+        surface="cli",
+        phase="command",
+        exc=exc,
+        module=__name__,
+        command=command,
+        target=target,
+        context=context or {}
+    );
+}
+
 """Populate __jac_argc/__jac_argv globals in the JIT engine from Python argv.
 
 When running via `jac run` (JIT pathway), there is no C main() to set these.
@@ -91,6 +126,7 @@ impl run(
     cache: bool = True,
     autonative: bool = False,
     diagnostics: str = "",
+    trace_errors: bool = False,
     args: list = []
 ) -> int {
     _ensure_jac_runtime();
@@ -98,6 +134,8 @@ impl run(
     import from jaclang.project.config { get_config }
     # Re-discover config from the file's directory (handles absolute paths)
     _discover_config_from_file(filename);
+    trace_errors = _resolve_trace_errors(trace_errors);
+    _configure_error_tracing(trace_errors);
     # Resolve diagnostics level: CLI flag > jac.toml > default ("error")
     if not diagnostics {
         cfg = get_config();
@@ -188,6 +226,11 @@ impl run(
             );
         }
     } except Exception as e {
+        if trace_errors {
+            _trace_cli_exception(
+                "run", filename, e, {"args": args, "main": main, "autonative": autonative}
+            );
+        }
         if diagnostics != "none" {
             if Jac.program.errors_had {
                 for error in Jac.program.errors_had {
@@ -228,6 +271,7 @@ impl enter(
     args: list = [],
     main: bool = True,
     root: str = '',
+    trace_errors: bool = False,
     nd: str = ''
 ) -> int {
     _ensure_jac_runtime();
@@ -235,36 +279,54 @@ impl enter(
     import from jaclang.jac0core.constructs { WalkerArchetype }
     # Re-discover config from the file's directory (handles absolute paths)
     _discover_config_from_file(filename);
+    trace_errors = _resolve_trace_errors(trace_errors);
+    _configure_error_tracing(trace_errors);
     (base, mod, mach) = _proc_file(filename);
     # Set user root if provided (for permission boundary)
     if root {
         mach.set_user_root(root);
     }
-    if filename.endswith('.jac') {
-        ret_module = Jac.jac_import(
-            target=mod, base_path=base, override_name='__main__' if main else None
-        );
-    } else {
-        mach.close();
-        console.error('Not a valid file!\nOnly supports `.jac`');
-        return 1;
-    }
-    if ret_module {
-        (loaded_mod, ) = ret_module;
-        if not loaded_mod {
-            console.error('Errors occurred while importing the module.');
-            mach.close();
-            return 1;
+    try {
+        if filename.endswith('.jac') {
+            ret_module = Jac.jac_import(
+                target=mod, base_path=base, override_name='__main__' if main else None
+            );
         } else {
-            archetype = getattr(loaded_mod, entrypoint)(*args);
-            mach.set_entry_node(nd);
-            if (
-                isinstance(archetype, WalkerArchetype)
-                and Jac.check_read_access(mach.entry_node)
-            ) {
-                Jac.spawn(mach.entry_node.archetype, archetype);
+            mach.close();
+            console.error('Not a valid file!\nOnly supports `.jac`');
+            return 1;
+        }
+        if ret_module {
+            (loaded_mod, ) = ret_module;
+            if not loaded_mod {
+                console.error('Errors occurred while importing the module.');
+                mach.close();
+                return 1;
+            } else {
+                archetype = getattr(loaded_mod, entrypoint)(*args);
+                mach.set_entry_node(nd);
+                if (
+                    isinstance(archetype, WalkerArchetype)
+                    and Jac.check_read_access(mach.entry_node)
+                ) {
+                    Jac.spawn(mach.entry_node.archetype, archetype);
+                }
             }
         }
+    } except Exception as e {
+        if trace_errors {
+            _trace_cli_exception(
+                "enter",
+                filename,
+                e,
+                {"entrypoint": entrypoint, "args": args, "root": root, "node": nd}
+            );
+        }
+        import from jaclang.jac0core.helpers { dump_traceback }
+        console.error(f"Error entering {entrypoint} in {filename}: {e}");
+        console.error(dump_traceback(e));
+        mach.close();
+        return 1;
     }
     mach.close();
     return 0;
@@ -278,6 +340,7 @@ impl start(
     faux: bool = False,
     dev: bool = False,
     api_port: int = 0,
+    trace_errors: bool = False,
     no_client: bool = False
 ) -> int {
     _ensure_jac_runtime();
@@ -299,6 +362,8 @@ impl start(
     }
     # Re-discover config from the file's directory (handles absolute paths)
     _discover_config_from_file(filename);
+    trace_errors = _resolve_trace_errors(trace_errors);
+    _configure_error_tracing(trace_errors);
     (base, mod, mach) = _proc_file(filename);
     lng = filename.split('.')[-1];
     # Load the Jac module (actual compilation/bundling happens in server.start())
@@ -312,6 +377,20 @@ impl start(
             return 1;
         }
     } except Exception as e {
+        if trace_errors {
+            _trace_cli_exception(
+                "start",
+                filename,
+                e,
+                {
+                    "port": port,
+                    "dev": dev,
+                    "api_port": api_port,
+                    "no_client": no_client,
+                    "faux": faux
+                }
+            );
+        }
         if Jac.program.errors_had {
             for error in Jac.program.errors_had {
                 console.error(error.pretty_print());
@@ -428,6 +507,20 @@ impl start(
         mach.close();
         return 0;
     } except Exception as e {
+        if trace_errors {
+            _trace_cli_exception(
+                "start",
+                filename,
+                e,
+                {
+                    "port": actual_api_port,
+                    "dev": dev,
+                    "api_port": api_port,
+                    "no_client": no_client,
+                    "faux": faux
+                }
+            );
+        }
         import from jaclang.jac0core.helpers { dump_traceback }
         console.error(f"Server error: {e}");
         console.error(dump_traceback(e));
@@ -603,30 +696,47 @@ def _start_vite_dev_server(base_path: str, vite_port: int, api_port: int) -> Any
 }
 
 """Debug the specified .jac file."""
-impl debug(filename: str, main: bool = True, cache: bool = False) -> int {
+impl debug(
+    filename: str, main: bool = True, cache: bool = False, trace_errors: bool = False
+) -> int {
     import from jaclang.jac0core.program { JacProgram }
     import from jaclang.jac0core.helpers { debugger as db }
+    _discover_config_from_file(filename);
+    trace_errors = _resolve_trace_errors(trace_errors);
+    _configure_error_tracing(trace_errors);
     (base, mod) = os.path.split(filename);
     base = base or './';
     mod = mod[:-4];
-    if filename.endswith('.jac') {
-        bytecode = JacProgram().compile(filename).gen.py_bytecode;
-        if bytecode {
-            code = marshal.loads(bytecode);
-            if db.has_breakpoint(bytecode) {
-                run(filename, main, cache);
+    try {
+        if filename.endswith('.jac') {
+            bytecode = JacProgram().compile(filename).gen.py_bytecode;
+            if bytecode {
+                code = marshal.loads(bytecode);
+                if db.has_breakpoint(bytecode) {
+                    run(filename, main, cache, False, "", trace_errors);
+                } else {
+                    func = types.FunctionType(code, globals());
+                    console.print('Debugging with Jac debugger.\n');
+                    db.runcall(func);
+                    console.print('Done debugging.');
+                }
             } else {
-                func = types.FunctionType(code, globals());
-                console.print('Debugging with Jac debugger.\n');
-                db.runcall(func);
-                console.print('Done debugging.');
+                console.error(f"Error while generating bytecode in {filename}.");
+                return 1;
             }
         } else {
-            console.error(f"Error while generating bytecode in {filename}.");
+            console.error('Not a .jac file.');
             return 1;
         }
-    } else {
-        console.error('Not a .jac file.');
+    } except Exception as e {
+        if trace_errors {
+            _trace_cli_exception(
+                "debug", filename, e, {"main": main, "cache": cache}
+            );
+        }
+        import from jaclang.jac0core.helpers { dump_traceback }
+        console.error(f"Debug error in {filename}: {e}");
+        console.error(dump_traceback(e));
         return 1;
     }
     return 0;

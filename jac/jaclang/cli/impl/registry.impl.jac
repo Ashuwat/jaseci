@@ -231,6 +231,20 @@ impl CommandRegistry._build_subparser(
 """Add an argument to an argparse parser."""
 impl CommandRegistry._add_argument(parser: argparse.ArgumentParser, arg: Arg) -> None {
     import from jaclang.cli.command { Arg, ArgKind }
+    def long_names(name: str) -> list[str] {
+        dashed = name.replace("_", "-");
+        if dashed == name {
+            return [f"--{name}"];
+        }
+        return [f"--{dashed}", f"--{name}"];
+    }
+    def no_long_names(name: str) -> list[str] {
+        dashed = name.replace("_", "-");
+        if dashed == name {
+            return [f"--no-{name}"];
+        }
+        return [f"--no-{dashed}", f"--no-{name}"];
+    }
     kwargs: dict = {"help": arg.help};
     if arg.choices {
         kwargs["choices"] = arg.choices;
@@ -268,9 +282,9 @@ impl CommandRegistry._add_argument(parser: argparse.ArgumentParser, arg: Arg) ->
                 kwargs["default"] = arg.default;
             }
             if arg.short {
-                parser.add_argument(f"-{arg.short}", f"--{arg.name}", **kwargs);
+                parser.add_argument(f"-{arg.short}", *long_names(arg.name), **kwargs);
             } else {
-                parser.add_argument(f"--{arg.name}", **kwargs);
+                parser.add_argument(*long_names(arg.name), **kwargs);
             }
         }
     } elif arg.kind == ArgKind.REMAINDER {
@@ -282,9 +296,9 @@ impl CommandRegistry._add_argument(parser: argparse.ArgumentParser, arg: Arg) ->
         kwargs["action"] = "store_true";
         kwargs["default"] = arg.default if arg.default is not None else False;
         if arg.short {
-            parser.add_argument(f"-{arg.short}", f"--{arg.name}", **kwargs);
+            parser.add_argument(f"-{arg.short}", *long_names(arg.name), **kwargs);
         } else {
-            parser.add_argument(f"--{arg.name}", **kwargs);
+            parser.add_argument(*long_names(arg.name), **kwargs);
         }
         # Add --no-X variant
         no_kwargs = {
@@ -292,7 +306,7 @@ impl CommandRegistry._add_argument(parser: argparse.ArgumentParser, arg: Arg) ->
             "dest": arg.name,
             "help": f"Disable {arg.name}"
         };
-        parser.add_argument(f"--no-{arg.name}", **no_kwargs);
+        parser.add_argument(*no_long_names(arg.name), **no_kwargs);
     } else {
         # Regular option
         kwargs["type"] = arg.typ;
@@ -301,9 +315,9 @@ impl CommandRegistry._add_argument(parser: argparse.ArgumentParser, arg: Arg) ->
             kwargs["required"] = True;
         }
         if arg.short {
-            parser.add_argument(f"-{arg.short}", f"--{arg.name}", **kwargs);
+            parser.add_argument(f"-{arg.short}", *long_names(arg.name), **kwargs);
         } else {
-            parser.add_argument(f"--{arg.name}", **kwargs);
+            parser.add_argument(*long_names(arg.name), **kwargs);
         }
     }
 }

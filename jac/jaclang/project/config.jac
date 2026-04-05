@@ -31,7 +31,8 @@ obj RunConfig {
         cache: bool = True,
         autonative: bool = False,
         topology_index: bool = True,
-        diagnostics: str = "error";  # "error" | "all" | "none"
+        diagnostics: str = "error",  # "error" | "all" | "none"
+        trace_errors: bool = False;
 }
 
 """Native compilation settings from [build.native] section."""

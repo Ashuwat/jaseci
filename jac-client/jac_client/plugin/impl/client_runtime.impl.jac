@@ -13,13 +13,13 @@ impl __jacJsx(tag: Any, props: dict = {}, children: Any = []) -> JsxElement {
     reactChildren = [];
     for child in childrenArray {
         if child != None {
-            reactChildren.append(child);
+            reactChildren.push(child);
         }
     }
     if len(reactChildren) > 0 {
         args = [tag, props];
         for child in reactChildren {
-            args.append(child);
+            args.push(child);
         }
         return React.createElement.apply(React, args);
     } else {
@@ -66,13 +66,8 @@ impl __getApiBaseUrl -> str {
     return globalThis.__JAC_API_BASE_URL__ || "";
 }
 
-# ============================================================================
-# AUTO-CACHE INFRASTRUCTURE
-# ============================================================================
-
-# Read compiler-provided endpoint effects from __jac_init__ JSON
-impl __getEndpointEffects -> dict {
-    if not globalThis.__jacEndpointEffects__ {
+impl __getJacInitData -> dict {
+    if not globalThis.__jacInitData__ {
         initEl = None;
         try {
             initEl = document.getElementById("__jac_init__");
@@ -81,18 +76,329 @@ impl __getEndpointEffects -> dict {
         }
         if initEl {
             try {
-                data = JSON.parse(initEl.textContent);
-                globalThis.__jacEndpointEffects__ = data["endpointEffects"] or {};
+                globalThis.__jacInitData__ = JSON.parse(initEl.textContent) or {};
             } except Exception as e {
                 console.warn(
-                    "[jac-client] Failed to parse __jac_init__ data, using empty effects:",
+                    "[jac-client] Failed to parse __jac_init__ data, using empty init payload:",
                     e
                 );
-                globalThis.__jacEndpointEffects__ = {};
+                globalThis.__jacInitData__ = {};
             }
         } else {
-            globalThis.__jacEndpointEffects__ = {};
+            globalThis.__jacInitData__ = {};
         }
+    }
+    return globalThis.__jacInitData__;
+}
+
+impl __getDebugUiConfig -> dict {
+    initData = __getJacInitData();
+    serverDebug = initData["debugUi"] if initData["debugUi"] else {};
+    localFlag = __getLocalStorage("jac_debug_ui");
+    queryFlag = "";
+    trueFlags = ["1", "true", "TRUE", "True"];
+    falseFlags = ["0", "false", "FALSE", "False"];
+    try {
+        params = Reflect.construct(URLSearchParams, [window.location.search]);
+        queryFlag = params.get("jac_debug") or "";
+    } except Exception { }
+    if trueFlags.includes(queryFlag) {
+        __setLocalStorage("jac_debug_ui", "1");
+        localFlag = "1";
+    } elif falseFlags.includes(queryFlag) {
+        __removeLocalStorage("jac_debug_ui");
+        localFlag = "";
+    }
+    envFlag = globalThis.__JAC_DEBUG_UI__ || "";
+    featureEnabled = (
+        trueFlags.includes(queryFlag)
+        or localFlag == "1"
+        or envFlag == "1"
+        or envFlag == True
+    );
+    traceErrors = bool(serverDebug["traceErrors"]) if serverDebug else False;
+    return {
+        "enabled": bool(traceErrors or featureEnabled),
+        "traceErrors": traceErrors,
+        "featureFlag": featureEnabled,
+        "queryFlag": queryFlag,
+        "server": serverDebug
+    };
+}
+
+impl jacShouldShowDebugUi -> bool {
+    return bool(__getDebugUiConfig()["enabled"]);
+}
+
+impl __getDebugStore -> dict {
+    if not globalThis.__jacDebugStore__ {
+        globalThis.__jacDebugStore__ = {
+            "events": [],
+            "maxEvents": 100,
+            "consolePatched": False
+        };
+    }
+    return globalThis.__jacDebugStore__;
+}
+
+impl __debugValueToString(value: Any) -> str {
+    if value == None {
+        return "null";
+    }
+    try {
+        if value.message {
+            return String(value.message);
+        }
+    } except Exception {
+    }
+    try {
+        jsonValue = JSON.stringify(value);
+        if jsonValue and jsonValue != "{}" {
+            return jsonValue;
+        }
+    } except Exception {
+    }
+    return String(value);
+}
+
+impl __debugArgsToMessage(*args: Any) -> str {
+    parts = [];
+    for arg in args {
+        parts.push(__debugValueToString(arg));
+    }
+    return parts.join(" ");
+}
+
+impl __notifyDebugStore -> None {
+    try {
+        window.dispatchEvent(
+            Reflect.construct(Event, ["jac-debug-store-update"])
+        );
+    } except Exception {
+    }
+}
+
+impl __recordDebugEvent(
+    severity: str,
+    source: str,
+    message: str,
+    stack: str = "",
+    details: dict = {}
+) -> None {
+    if not message and not stack {
+        return;
+    }
+    store = __getDebugStore();
+    timestamp = Reflect.construct(Date, []).toISOString();
+    route = "";
+    try {
+        route = window.location.pathname or "";
+    } except Exception {
+    }
+    fingerprint = f"{severity}|{message}|{stack}";
+    existing = None;
+    for event in store["events"] {
+        if event["fingerprint"] == fingerprint {
+            existing = event;
+        }
+    }
+    if existing {
+        existing["timestamp"] = timestamp;
+        existing["count"] = existing["count"] + 1;
+        if not existing["sources"].includes(source) {
+            existing["sources"].push(source);
+        }
+        if route {
+            existing["route"] = route;
+        }
+        if details {
+            existing["details"] = details;
+        }
+    } else {
+        store["events"].push(
+            {
+                "id": len(store["events"]) + 1,
+                "fingerprint": fingerprint,
+                "severity": severity,
+                "message": message,
+                "stack": stack,
+                "sources": [source],
+                "route": route,
+                "timestamp": timestamp,
+                "count": 1,
+                "details": details or {}
+            }
+        );
+        while len(store["events"]) > store["maxEvents"] {
+            store["events"].shift();
+        }
+    }
+    __notifyDebugStore();
+}
+
+impl __installDebugConsoleHooks -> None {
+    store = __getDebugStore();
+    if store["consolePatched"] {
+        return;
+    }
+    store["consolePatched"] = True;
+    originalWarn = console.warn;
+    originalError = console.error;
+    def patchedWarn(message: Any = "", meta: Any = None) -> None {
+        warnText = String(message);
+        if meta {
+            warnText = warnText + " " + String(meta);
+        }
+        __recordDebugEvent(
+            "warning",
+            "console.warn",
+            warnText
+        );
+        originalWarn.apply(console, [message, meta] if meta else [message]);
+    }
+    def patchedError(message: Any = "", meta: Any = None) -> None {
+        errorText = String(message);
+        if meta {
+            errorText = errorText + " " + String(meta);
+        }
+        __recordDebugEvent(
+            "error",
+            "console.error",
+            errorText
+        );
+        originalError.apply(
+            console,
+            [message, meta] if meta else [message]
+        );
+    }
+    console.warn = patchedWarn;
+    console.error = patchedError;
+}
+
+impl __getDebugSnapshot -> dict {
+    store = __getDebugStore();
+    errors = [];
+    warnings = [];
+    idx = len(store["events"]) - 1;
+    while idx >= 0 {
+        event = store["events"][idx];
+        if event["severity"] == "error" {
+            errors.push(event);
+        } elif event["severity"] == "warning" {
+            warnings.push(event);
+        }
+        idx = idx - 1;
+    }
+    status = "ok";
+    if len(errors) > 0 {
+        status = "error";
+    } elif len(warnings) > 0 {
+        status = "warning";
+    }
+    return {
+        "events": store["events"],
+        "errors": errors,
+        "warnings": warnings,
+        "errorCount": len(errors),
+        "warningCount": len(warnings),
+        "eventCount": len(store["events"]),
+        "status": status
+    };
+}
+
+impl __renderDebugEvent(event: dict) -> JsxElement {
+    severityColor = "#dc2626" if event["severity"] == "error" else "#d97706";
+    detailText = "";
+    try {
+        detailText = JSON.stringify(event["details"] or {}, None, 2);
+    } except Exception {
+        detailText = "";
+    }
+    return (
+        <div
+            style={{
+                padding: "0.75rem 0",
+                borderTop: "1px solid rgba(15, 23, 42, 0.08)"
+            }}
+        >
+            <div
+                style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "0.75rem",
+                    marginBottom: "0.35rem"
+                }}
+            >
+                <span
+                    style={{
+                        color: severityColor,
+                        fontWeight: "700",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.06em"
+                    }}
+                >
+                    {event["severity"]}
+                </span>
+                <span style={{color: "#64748b"}}>
+                    {event["timestamp"]}
+                </span>
+            </div>
+            <div style={{fontWeight: "600", marginBottom: "0.25rem"}}>
+                {event["message"]}
+            </div>
+            <div style={{color: "#475569", marginBottom: "0.25rem"}}>
+                source: {event["sources"].join(", ")}
+            </div>
+            <div style={{color: "#475569", marginBottom: "0.25rem"}}>
+                route: {event["route"] or "-"}
+            </div>
+            <div style={{color: "#475569", marginBottom: "0.25rem"}}>
+                count: {event["count"]}
+            </div>
+            <pre
+                hidden={not event["stack"]}
+                style={{
+                    margin: "0.5rem 0 0 0",
+                    padding: "0.65rem",
+                    borderRadius: "10px",
+                    background: "#f8fafc",
+                    border: "1px solid rgba(15, 23, 42, 0.08)",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    overflowX: "auto"
+                }}
+            >
+                {event["stack"]}
+            </pre>
+            <pre
+                hidden={not detailText or detailText == "{}"}
+                style={{
+                    margin: "0.5rem 0 0 0",
+                    padding: "0.65rem",
+                    borderRadius: "10px",
+                    background: "#f8fafc",
+                    border: "1px solid rgba(15, 23, 42, 0.08)",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    overflowX: "auto"
+                }}
+            >
+                {detailText}
+            </pre>
+        </div>
+    );
+}
+
+# ============================================================================
+# AUTO-CACHE INFRASTRUCTURE
+# ============================================================================
+
+# Read compiler-provided endpoint effects from __jac_init__ JSON
+impl __getEndpointEffects -> dict {
+    if not globalThis.__jacEndpointEffects__ {
+        data = __getJacInitData();
+        globalThis.__jacEndpointEffects__ = data["endpointEffects"] or {};
     }
     return globalThis.__jacEndpointEffects__;
 }
@@ -464,6 +770,7 @@ impl ErrorFallback(error: str, resetErrorBoundary: Any) -> JsxElement {
     try {
         errMsg = error.error.message if error.error else str(error);
         errStack = error.error.stack if error.error else "";
+        __recordDebugEvent("error", "ErrorBoundary", errMsg, errStack);
         __jacReportError(errMsg, errStack, "", "ErrorBoundary");
     } except Exception as e {
         console.warn("[jac-client] ErrorFallback: failed to report error:", e);
@@ -531,6 +838,154 @@ impl ErrorFallback(error: str, resetErrorBoundary: Any) -> JsxElement {
                 </button>
             </div>
         </div>;
+}
+
+impl JacDebugWidget() -> JsxElement {
+    config = __getDebugUiConfig();
+    [open, setOpen] = reactUseState(False);
+    [snapshot, setSnapshot] = reactUseState(__getDebugSnapshot());
+    reactUseEffect(
+        lambda {
+            listener = lambda event: Any {
+                setSnapshot(__getDebugSnapshot());
+            };
+            window.addEventListener("jac-debug-store-update", listener);
+            return lambda {
+                window.removeEventListener("jac-debug-store-update", listener);
+            };
+        },
+        []
+    );
+    if not config["enabled"] {
+        return <></>;
+    }
+    totalCount = snapshot["errorCount"] + snapshot["warningCount"];
+    errorViews = [];
+    for event in snapshot["errors"] {
+        errorViews.push(__renderDebugEvent(event));
+    }
+    warningViews = [];
+    for event in snapshot["warnings"] {
+        warningViews.push(__renderDebugEvent(event));
+    }
+    chipStyle = {
+        position: "fixed",
+        right: "16px",
+        bottom: "16px",
+        zIndex: 2147483647,
+        display: "flex",
+        alignItems: "center",
+        gap: "0.5rem",
+        padding: "0.72rem 0.82rem",
+        borderRadius: "999px",
+        border: "1px solid rgba(15, 23, 42, 0.12)",
+        background: (
+            "#dc2626"
+            if snapshot["status"] == "error"
+            else (
+                "#d97706"
+                if snapshot["status"] == "warning"
+                else "rgba(15, 23, 42, 0.92)"
+            )
+        ),
+        color: "white",
+        boxShadow: "0 12px 30px rgba(15, 23, 42, 0.28)",
+        cursor: "pointer",
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontSize: "12px"
+    };
+    panelStyle = {
+        position: "fixed",
+        right: "16px",
+        bottom: "72px",
+        zIndex: 2147483647,
+        width: "320px",
+        padding: "0.9rem 1rem",
+        borderRadius: "16px",
+        border: "1px solid rgba(15, 23, 42, 0.12)",
+        background: "rgba(255, 255, 255, 0.98)",
+        color: "#0f172a",
+        boxShadow: "0 18px 40px rgba(15, 23, 42, 0.18)",
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontSize: "12px",
+        lineHeight: "1.5"
+    };
+    statusColor = (
+        "#fecaca"
+        if snapshot["status"] == "error"
+        else ("#fde68a" if snapshot["status"] == "warning" else "#86efac")
+    );
+    return (
+        <>
+            <div
+                onClick={lambda { setOpen(not open);}}
+                style={chipStyle}
+                role="button"
+                title="Toggle Jac debug overlay"
+            >
+                <span
+                    style={{
+                        width: "8px",
+                        height: "8px",
+                        borderRadius: "999px",
+                        background: statusColor,
+                        display: "inline-block"
+                    }}
+                />
+                <span>
+                    {totalCount}
+                </span>
+            </div>
+            <div style={panelStyle} hidden={not open}>
+                <div style={{fontWeight: "700", marginBottom: "0.5rem"}}>
+                    Jac Debug
+                </div>
+                <div>
+                    trace errors: {("on" if config["traceErrors"] else "off")}
+                </div>
+                <div>
+                    feature flag: {("on" if config["featureFlag"] else "off")}
+                </div>
+                <div>
+                    route: {window.location.pathname}
+                </div>
+                <div
+                    style={{
+                        marginTop: "0.7rem",
+                        paddingTop: "0.7rem",
+                        borderTop: "1px solid rgba(15, 23, 42, 0.08)"
+                    }}
+                >
+                    <div style={{marginBottom: "0.5rem"}}>
+                        errors: {snapshot["errorCount"]}
+                    </div>
+                    <div style={{marginBottom: "0.75rem"}}>
+                        warnings: {snapshot["warningCount"]}
+                    </div>
+                    <div
+                        hidden={snapshot["errorCount"] == 0}
+                        style={{marginBottom: "0.5rem", fontWeight: "700"}}
+                    >
+                        Errors
+                    </div>
+                    {errorViews}
+                    <div
+                        hidden={snapshot["warningCount"] == 0}
+                        style={{marginTop: "0.5rem", marginBottom: "0.5rem", fontWeight: "700"}}
+                    >
+                        Warnings
+                    </div>
+                    {warningViews}
+                    <div
+                        hidden={snapshot["eventCount"] != 0}
+                        style={{color: "#475569"}}
+                    >
+                        No client warnings or errors captured yet.
+                    </div>
+                </div>
+            </div>
+        </>
+    );
 }
 
 impl errorOverlay(filePath: str, errors: str) -> JsxElement {
@@ -981,7 +1436,7 @@ impl JacForm(props: dict) -> JsxElement {
     # Render all fields
     fields = [];
     for fieldName in fieldNames {
-        fields.append(renderField(fieldName));
+        fields.push(renderField(fieldName));
     }
     layoutStyle = getLayoutStyle();
     formClassName = className or "";
@@ -1045,6 +1500,7 @@ impl __jacReportError(
 Called once during app initialization.
 """
 impl __jacInstallErrorHandlers -> None {
+    __installDebugConsoleHooks();
     if window.__jacErrorHandlersInstalled {
         return;
     }
@@ -1052,21 +1508,38 @@ impl __jacInstallErrorHandlers -> None {
     # Catch synchronous errors (e.g., TypeError, ReferenceError)
     window.addEventListener(
         "error",
-        lambda event: Any { __jacReportError(
-            event.message or "Unknown error",
-            event.error.stack if event.error else "",
-            event.filename or "",
-            "window.onerror"
-        );}
+        lambda event: Any {
+            message = event.message or "Unknown error";
+            stack = event.error.stack if event.error else "";
+            __recordDebugEvent("error", "window.onerror", message, stack);
+            __jacReportError(
+                message,
+                stack,
+                event.filename or "",
+                "window.onerror"
+            );
+        }
     );
     # Catch unhandled promise rejections (e.g., failed fetch, async errors)
     window.addEventListener(
         "unhandledrejection",
-        lambda event: Any { reason = event.reason;message = "";stack = "";if reason {
-            message = reason.message or str(reason);
-            stack = reason.stack or "";
-        } else {
-            message = "Unhandled promise rejection";
-        } __jacReportError(message, stack, "", "unhandledrejection");}
+        lambda event: Any {
+            reason = event.reason;
+            message = "";
+            stack = "";
+            if reason {
+                message = reason.message or str(reason);
+                stack = reason.stack or "";
+            } else {
+                message = "Unhandled promise rejection";
+            }
+            __recordDebugEvent(
+                "error",
+                "unhandledrejection",
+                message,
+                stack
+            );
+            __jacReportError(message, stack, "", "unhandledrejection");
+        }
     );
 }

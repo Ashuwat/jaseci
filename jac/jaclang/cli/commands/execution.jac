@@ -42,6 +42,13 @@ glob registry = get_registry();
             short="e"
         ),
         Arg.create(
+            "trace_errors",
+            typ=bool,
+            default=False,
+            help="Emit structured JSON error traces for debugging",
+            short=""
+        ),
+        Arg.create(
             "args", kind=ArgKind.REMAINDER, help="Arguments passed to the script"
         ),
 
@@ -64,6 +71,7 @@ def run(
     cache: bool = True,
     autonative: bool = False,
     diagnostics: str = "",
+    trace_errors: bool = False,
     args: list = []
 ) -> int;
 
@@ -80,6 +88,13 @@ def run(
         Arg.create("main", typ=bool, default=True, help="Treat as __main__", short="m"),
         Arg.create("root", default="", help="Root executor ID", short="r"),
         Arg.create("node", default="", help="Starting node ID", short="n"),
+        Arg.create(
+            "trace_errors",
+            typ=bool,
+            default=False,
+            help="Emit structured JSON error traces for debugging",
+            short=""
+        ),
         Arg.create(
             "profile",
             default="",
@@ -101,6 +116,7 @@ def enter(
     args: list = [],
     main: bool = True,
     root: str = "",
+    trace_errors: bool = False,
     nd: str = ""
 ) -> int;
 
@@ -144,6 +160,13 @@ def enter(
             help="Skip client bundling/serving (API only)"
         ),
         Arg.create(
+            "trace_errors",
+            typ=bool,
+            default=False,
+            help="Emit structured JSON error traces for debugging",
+            short=""
+        ),
+        Arg.create(
             "profile",
             default="",
             short="",
@@ -170,6 +193,7 @@ def start(
     faux: bool = False,
     dev: bool = False,
     api_port: int = 0,
+    trace_errors: bool = False,
     no_client: bool = False
 ) -> int;
 
@@ -189,9 +213,18 @@ def start(
             short="",
             help="Configuration profile to load (e.g. prod, staging)"
         ),
+        Arg.create(
+            "trace_errors",
+            typ=bool,
+            default=False,
+            help="Emit structured JSON error traces for debugging",
+            short=""
+        ),
 
     ],
     examples=[("jac debug myprogram.jac", "Debug a program"), ],
     group="execution"
 )
-def debug(filename: str, main: bool = True, cache: bool = False) -> int;
+def debug(
+    filename: str, main: bool = True, cache: bool = False, trace_errors: bool = False
+) -> int;

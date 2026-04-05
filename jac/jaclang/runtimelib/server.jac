@@ -29,6 +29,7 @@ import from jaclang.runtimelib.transport {
     HTTPTransport,
     Meta
 }
+import from jaclang.runtimelib.error_trace { ErrorTraceStore }
 import from jaclang { JacRuntime as Jac }
 import from jaclang.project.config { get_config }
 import from jaclang.runtimelib.scheduler { Scheduler }
@@ -84,14 +85,21 @@ obj UserManager {
 """Manages execution contexts for user operations."""
 obj ExecutionManager {
     has base_path: str,
-        user_manager: UserManager;
+        user_manager: UserManager,
+        error_trace_store: ErrorTraceStore | None = None;
 
     async def execute_function(
-        func: Callable[(..., Any)], args: dict[(str, Any)], username: str
+        func: Callable[(..., Any)],
+        args: dict[(str, Any)],
+        username: str,
+        trace_context: dict[(str, Any)] | None = None
     ) -> dict[str, JsonValue];
 
     async def spawn_walker(
-        walker_cls: type[WalkerArchetype], fields: dict[(str, Any)], username: str
+        walker_cls: type[WalkerArchetype],
+        fields: dict[(str, Any)],
+        username: str,
+        trace_context: dict[(str, Any)] | None = None
     ) -> dict[str, JsonValue];
 
     async def report_collector(call_state: CallState) -> dict[str, JsonValue];
