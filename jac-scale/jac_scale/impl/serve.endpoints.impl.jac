@@ -41,6 +41,27 @@ def _build_error_details(result: dict) -> dict[str, Any] | None {
     }
     if is_error_tracing_enabled() and result.get("traceback") {
         details["traceback"] = result["traceback"];
+        if result.get("frames") {
+            details["frames"] = result["frames"];
+        }
+        if result.get("call_path") {
+            details["call_path"] = result["call_path"];
+        }
+        if result.get("call_tree") {
+            details["call_tree"] = result["call_tree"];
+        }
+        if result.get("call_graph") {
+            details["call_graph"] = result["call_graph"];
+        }
+        if result.get("root_entry") {
+            details["root_entry"] = result["root_entry"];
+        }
+        if result.get("entry_frame_index") is not None {
+            details["entry_frame_index"] = result["entry_frame_index"];
+        }
+        if result.get("error_frame_index") is not None {
+            details["error_frame_index"] = result["error_frame_index"];
+        }
     }
     return details if details else None;
 }

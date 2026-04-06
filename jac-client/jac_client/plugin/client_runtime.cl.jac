@@ -81,6 +81,16 @@ def:pub __renderDebugEventDetail(
     event: dict, trace_enabled: bool = False
 ) -> JsxElement;
 def:pub __renderDebugLlmTraceDetail(event: dict) -> JsxElement;
+def:pub __parseDebugStackText(stack: str) -> list;
+def:pub __normalizeDebugTraceData(event: dict) -> dict;
+def:pub __renderDebugSourceContext(frame: dict) -> JsxElement;
+def:pub __renderDebugFrameCard(
+    frame: dict, is_error: bool = False, compact: bool = False
+) -> JsxElement;
+def:pub __renderDebugCallTreeNode(
+    tree_item: dict, depth: int = 0, path_only: bool = False
+) -> JsxElement;
+def:pub __renderDebugCallGraph(graph: dict) -> JsxElement;
 def:pub __getLocalStorage(key: str) -> str;
 def:pub __setLocalStorage(key: str, value: str) -> None;
 def:pub __removeLocalStorage(key: str) -> None;

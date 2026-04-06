@@ -33,7 +33,14 @@ obj ErrorTraceEvent {
         error_type: str = "",
         message: str = "",
         stack_trace: str = "",
-        context: dict[str, Any] = {};
+        context: dict[str, Any] = {},
+        frames: list[dict[str, Any]] = [],
+        call_path: list[dict[str, Any]] = [],
+        call_tree: dict[str, Any] = {},
+        call_graph: dict[str, Any] = {},
+        root_entry: str = "",
+        entry_frame_index: int | None = None,
+        error_frame_index: int | None = None;
 
     def to_dict -> dict[str, Any];
 }
