@@ -3016,7 +3016,9 @@ def _find_cfg_node_for(at_node: uni.UniNode) -> uni.UniCFGNode | None {
 
 Some narrowing walks can encounter equivalent CFG nodes that are not the same
 Python object instance. Falling back to source span matching keeps branch
-classification stable for else-if / fallthrough joins.
+classification stable for else-if / fallthrough joins so terminal guard
+branches (for example `if x is None { raise ... }`) don't widen the surviving
+path back to the declared type just because the CFG node identity changed.
 """
 impl TypeEvaluator._cfg_nodes_match(
     expected: uni.UniCFGNode, actual: uni.UniCFGNode
@@ -3168,6 +3170,9 @@ impl TypeEvaluator._compute_narrowed_at(
         if isinstance(pred, uni.CfgExpr) {
             predicate = self._find_predicate_for(target, pred.expr);
             if predicate is not None {
+                # Use structural matching here, not raw identity, because the
+                # enclosing statement can be represented by an equivalent CFG
+                # node instance on the backward walk.
                 is_true_edge = (
                     pred.sc_true_target is not None
                     and self._cfg_nodes_match(pred.sc_true_target, stmt)
