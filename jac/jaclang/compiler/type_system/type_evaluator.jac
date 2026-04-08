@@ -512,6 +512,7 @@ obj TypeEvaluator {
         target: NarrowingTarget, stmt: uni.UniCFGNode, visited: set
     ) -> TypeBase | None;
 
+    def _cfg_nodes_match(expected: uni.UniCFGNode, actual: uni.UniCFGNode) -> bool;
     def _classify_edge(pred: uni.IfStmt, succ: uni.UniCFGNode) -> str;
     # --- Shared narrowing utilities ---
     def _find_predicate_for(

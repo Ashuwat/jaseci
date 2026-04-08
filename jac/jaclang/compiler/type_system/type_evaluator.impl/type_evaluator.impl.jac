@@ -3012,6 +3012,28 @@ def _find_cfg_node_for(at_node: uni.UniNode) -> uni.UniCFGNode | None {
     return None;
 }
 
+"""Match CFG nodes by identity first, then by source span.
+
+Some narrowing walks can encounter equivalent CFG nodes that are not the same
+Python object instance. Falling back to source span matching keeps branch
+classification stable for else-if / fallthrough joins.
+"""
+impl TypeEvaluator._cfg_nodes_match(
+    expected: uni.UniCFGNode, actual: uni.UniCFGNode
+) -> bool {
+    if expected is actual {
+        return True;
+    }
+    if expected.loc is None or actual.loc is None {
+        return False;
+    }
+    return (
+        expected.loc.mod_path == actual.loc.mod_path
+        and expected.loc.pos_start == actual.loc.pos_start
+        and expected.loc.pos_end == actual.loc.pos_end
+    );
+}
+
 """Get the narrowed type of a symbol at the given AST node via CFG walk."""
 impl TypeEvaluator.get_narrowed_type(
     symbol: uni.Symbol, at_node: uni.UniNode
@@ -3146,8 +3168,14 @@ impl TypeEvaluator._compute_narrowed_at(
         if isinstance(pred, uni.CfgExpr) {
             predicate = self._find_predicate_for(target, pred.expr);
             if predicate is not None {
-                is_true_edge = stmt is pred.sc_true_target;
-                is_false_edge = stmt is pred.sc_false_target;
+                is_true_edge = (
+                    pred.sc_true_target is not None
+                    and self._cfg_nodes_match(pred.sc_true_target, stmt)
+                );
+                is_false_edge = (
+                    pred.sc_false_target is not None
+                    and self._cfg_nodes_match(pred.sc_false_target, stmt)
+                );
                 if is_true_edge or is_false_edge {
                     narrowed = self._apply_narrowing(
                         predicate, pred_narrowed, is_true_edge, target
@@ -3193,10 +3221,6 @@ impl TypeEvaluator._compute_narrowed_at(
                 }
             }
         }
-        # TODO: ElseIf (elif) narrowing needs CFG fix - predecessor nodes don't match.
-        # The CFG builds correct links but type checker sees different node instances.
-        # This is a future PR task.
-
         # Check if predecessor is an AssertStmt with isinstance narrowing.
         # assert isinstance(x, T) narrows x to T for subsequent statements.
         if isinstance(pred, uni.AssertStmt) {
@@ -3310,16 +3334,18 @@ impl TypeEvaluator._compute_narrowed_at(
 """Classify a CFG edge from an IfStmt predecessor to a successor as true/false."""
 impl TypeEvaluator._classify_edge(pred: uni.IfStmt, succ: uni.UniCFGNode) -> str {
     # True branch: succ is the first statement in pred.body.
-    if pred.body and succ is pred.body[0] {
+    if pred.body and self._cfg_nodes_match(pred.body[0], succ) {
         return "true";
     }
     # False branch: ElseIf (which IS a CodeBlockStmt/UniCFGNode).
-    if isinstance(pred.else_body, uni.ElseIf) and succ is pred.else_body {
+    if isinstance(pred.else_body, uni.ElseIf)
+    and self._cfg_nodes_match(pred.else_body, succ) {
         return "false";
     }
     # False branch: ElseStmt (NOT a CFG node) -- edge goes to its body[0].
     if isinstance(pred.else_body, uni.ElseStmt) {
-        if pred.else_body.body and succ is pred.else_body.body[0] {
+        if pred.else_body.body
+        and self._cfg_nodes_match(pred.else_body.body[0], succ) {
             return "false";
         }
     }
