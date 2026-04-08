@@ -55,10 +55,59 @@ def test_raise_guard_elif(rt: Runtime, key: str) -> str {
     return rt.program.mtir_map.get(key, "");
 }
 
+def test_raise_guard_after_nested_if(rt: Runtime, flag: bool) -> dict[str, str] {
+    if rt.program is None {
+        raise ValueError("missing program");
+    }
+    if flag {
+        _ = len(rt.program.mtir_map);
+    }
+    return rt.program.mtir_map;
+}
+
+def test_raise_guard_inside_try(rt: Runtime) -> dict[str, str] {
+    if rt.program is None {
+        raise RuntimeError("runtime not loaded");
+    }
+    try {
+        return rt.program.mtir_map;
+    } except KeyError {
+        return {};
+    }
+}
+
+def test_raise_guard_after_try(rt: Runtime) -> str {
+    if rt.program is None {
+        raise ValueError("missing program");
+    }
+    size = 0;
+    try {
+        size = len(rt.program.mtir_map);
+    } except KeyError {
+        size = 0;
+    }
+    return str(size + len(rt.program.mtir_map));
+}
+
 test "raise guard narrowing works in test blocks" {
     program: Program | None = Program();
     if program is None {
         raise ValueError("missing program");
     }
     program.mtir_map;
+}
+
+test "raise guard narrowing survives nested blocks in tests" {
+    program: Program | None = Program();
+    if program is None {
+        raise ValueError("missing program");
+    }
+    try {
+        _ = len(program.mtir_map);
+    } except KeyError {
+        ;
+    }
+    if len(program.mtir_map) > 0 {
+        program.mtir_map;
+    }
 }
