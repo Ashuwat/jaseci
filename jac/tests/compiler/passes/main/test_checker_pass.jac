@@ -1932,6 +1932,20 @@ test "assert_isinstance_narrowing" {
     assert 'has no attribute "value"' in err_msg , f"Expected attribute error, got: {err_msg}";
 }
 
+"""Test raise-guard narrowing matches assert-style fallthrough narrowing."""
+test "raise_guard_narrowing" {
+    program = JacProgram();
+    mod = program.compile(
+        os.path.join(CHECKER_FIXTURES, "checker_raise_guard_narrowing.jac"),
+        options=NO_TC
+    );
+    TypeCheckPass(ir_in=mod, prog=program);
+
+    assert len(program.errors_had) == 0 , f"Expected 0 type errors for raise-guard narrowing, but got " + f"{len(
+        program.errors_had
+    )}:\n" + "\n---\n".join(err.pretty_print() for err in program.errors_had);
+}
+
 """Test assignment-based type narrowing."""
 test "assignment_narrowing" {
     program = JacProgram();
