@@ -2778,17 +2778,27 @@ impl TypeEvaluator._get_enum_member_type_for_decl(
 impl TypeEvaluator._assign_callable(
     src_func: FunctionType, dest_func: FunctionType, strict: bool = False
 ) -> bool {
+    return self._callable_mismatch(src_func, dest_func, strict) is None;
+}
+
+impl TypeEvaluator._callable_mismatch(
+    src_func: FunctionType, dest_func: FunctionType, strict: bool = False
+) -> CallableMismatch | None {
     if dest_func.is_gradual_callable_form() {
-        if dest_func.return_type and src_func.return_type {
-            return self.assign_type(
+        if dest_func.return_type
+            and src_func.return_type
+            and not self.assign_type(
                 src_func.return_type, dest_func.return_type, strict
+            ) {
+            return ReturnMismatch(
+                src_return=src_func.return_type, dest_return=dest_func.return_type
             );
         }
-        return True;
+        return None;
     }
 
     if src_func.is_gradual_callable_form() {
-        return False;
+        return GradualSourceMismatch();
     }
 
     src_params = [
@@ -2812,7 +2822,7 @@ impl TypeEvaluator._assign_callable(
         }
 
         if not self.assign_type(dest_param.param_type, src_param.param_type, strict) {
-            return False;
+            return ParameterMismatch(src_param=src_param, dest_param=dest_param);
         }
     }
 
@@ -2820,7 +2830,9 @@ impl TypeEvaluator._assign_callable(
         for i in range(len(dest_params), len(src_params)) {
             src_param = src_params[i];
             if not src_param.is_optional {
-                return False;
+                return ArityMismatch(
+                    src_count=len(src_params), dest_count=len(dest_params)
+                );
             }
         }
     }
@@ -2829,14 +2841,14 @@ impl TypeEvaluator._assign_callable(
         dest_ret = self._convert_to_instance(dest_func.return_type);
 
         if self.is_none_type(dest_ret) {
-            return True;
+            return None;
         }
         src_ret = self._convert_to_instance(src_func.return_type);
         if not self.assign_type(src_ret, dest_ret, strict) {
-            return False;
+            return ReturnMismatch(src_return=src_ret, dest_return=dest_ret);
         }
     }
-    return True;
+    return None;
 }
 
 impl TypeEvaluator._assign_class(
