@@ -398,6 +398,16 @@ glob CHECKER_DIRS: dict[(str, str)] = {
              ]
          ),
          (
+             "sum_element_type",
+             "checker",
+             "checker_sum_element_type.jac",
+             1,
+             True,
+             [(0, """
+    Cannot assign list[float] to Iterable[int]
+    """)]
+         ),
+         (
              "kwargs_literal_overload",
              "checker",
              "checker_kwargs_literal_overload.jac",
