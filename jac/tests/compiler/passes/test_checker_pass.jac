@@ -398,6 +398,14 @@ glob CHECKER_DIRS: dict[(str, str)] = {
              ]
          ),
          (
+             "subscript_guard_assignment",
+             "checker",
+             "checker_subscript_guard_assignment.jac",
+             3,
+             True,
+             []
+         ),
+         (
              "sum_element_type",
              "checker",
              "checker_sum_element_type.jac",
