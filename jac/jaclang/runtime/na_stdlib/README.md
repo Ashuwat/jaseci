@@ -70,22 +70,19 @@ native layout records the emitted name separately from its source-level key.
 - **`gzip.jac`** (#6978 Phase 2) -- a Mechanism-B gzip framing over the
   bundled `zlib` floor (no new FFI): `compress(data, compresslevel=9, mtime=0)`
   and `decompress(data)`. gzip is zlib's DEFLATE engine plus an RFC 1952 header,
-  CRC-32, and ISIZE trailer, so the surface reuses the `zlib` floor's one-shot
-  `compress2` / `uncompress2`. `compress` takes the raw DEFLATE body (the zlib
-  stream with its 2-byte header + 4-byte adler32 stripped -- the DEFLATE bytes
-  are identical under either frame) and wraps it; the result is byte-identical
-  to CPython's `gzip.compress` at the same level/`mtime` (XFL 2 for level 9,
+  CRC-32, and ISIZE trailer, so the surface reuses the `zlib` floor's
+  `compress2` and shared streaming inflater. `compress` takes the raw DEFLATE
+  body (the zlib stream with its 2-byte header + 4-byte adler32 stripped --
+  the DEFLATE bytes are identical under either frame) and wraps it; the result
+  is byte-identical to CPython's `gzip.compress` at the same level/`mtime` (XFL 2 for level 9,
   4 for level < 2, 0 otherwise -- zlib's gzip-header rule, which CPython
   reuses -- and OS byte 255; CPython 3.14 also defaults `mtime` to 0, so the
   defaults agree byte-for-byte). `decompress` walks the members of the stream
   exactly as CPython does: per member it parses the header (honoring the
   FEXTRA / FNAME / FCOMMENT skips; the 2 FHCRC bytes are skipped unverified,
-  which is also CPython's behavior), re-frames the remaining input as a zlib
-  stream so the member's own trailer bytes stand in for the adler32, inflates
-  through `uncompress2` -- whose consumed-source count locates the member
-  boundary; the near-certain final adler mismatch (`Z_DATA_ERROR`) and the
-  2^-32 coincidence where the trailer bytes equal the output's adler32
-  (`Z_OK`) are both accepted -- then enforces gzip's own CRC-32 and ISIZE
+  which is also CPython's behavior), then raw-inflates the DEFLATE body in a
+  single streaming pass (`windowBits = -15`); the stream's `total_in` locates
+  the member boundary, after which gzip's own CRC-32 and ISIZE are enforced
   (compared mod 2^32, per RFC 1952, so members over 4 GiB verify the same way
   CPython does) before concatenating the member outputs. The output buffer
   starts at the final-ISIZE hint and grows geometrically on `Z_BUF_ERROR` up
@@ -578,6 +575,27 @@ Two conventions make foreign byte I/O work:
   `crc32`) would shadow it. Bind the non-colliding variant instead; the floor
   uses `crc32_z` / `adler32_z`.
 
+`decompress` does not use the one-shot `uncompress`: a zlib stream carries no
+output-size field, so a buffer-too-small retry would re-inflate the whole
+input. Instead `zlib.jac`, `gzip.jac`, and `zipfile.jac` call one shared
+driver, `z_inflate_all(src, src_off, src_len, window_bits, cap, ceiling)`,
+which owns the `z_stream` lifecycle end to end: it pokes `next_in`/`avail_in`
+and `next_out`/`avail_out` into a `b"\x00" * 112` z_stream image through the
+`__mem_store_i32/i64` intrinsics (the LP64 `z_stream` field offsets live in
+the floor), streams `inflate` over a `malloc`/`realloc` arena, refeeds
+`avail_in` between calls when a source larger than one `uInt` is clamped, and
+copies the produced bytes once into the exact-size `bytes` result, returning
+the final libz status (plus an `init_ok` flag distinguishing `inflateInit2_`
+failure) in a `ZInflateResult`. Surfaces only map `status` to their own error
+type. Payload addresses are recovered as `int` with `memchr(buf, buf[0], 1)`,
+which always matches at offset 0 (empty input yields 0). Growth doubles the
+arena up to a caller-supplied ceiling; every site derives that ceiling from
+the floor's `z_inflate_bound(src_len, slack)` -- DEFLATE's ~1032x expansion
+bound plus slack (64 MiB for zlib, the default 1 KiB for the gzip per-member
+bound and the zipfile declared-size pre-check); empty or truncated input
+surfaces as `Z_BUF_ERROR` and raises `ValueError`, matching CPython's
+`error -5`.
+
 `bz2` (#6978 Phase 2) follows the same two-file split: `_bz2_native.jac`
 wraps the one-shot `BZ2_bzBuffToBuffCompress` / `BZ2_bzBuffToBuffDecompress`
 buffer API (logical name `bz2` -> `libbz2`; the in-process JIT dlopens the
@@ -629,14 +647,15 @@ length, and CRC-32. Malformed archives raise `BadZipFile`; missing names raise
 `KeyError`; reading a closed archive raises `ValueError`. Invalid UTF-8 names
 raise `BadZipFile` (CPython raises `UnicodeDecodeError`).
 
-The DEFLATE decoder reuses the existing `_zlib_native` one-shot FFI. A first
-pass obtains the decoded bytes from a zlib frame with a placeholder Adler-32.
-A second pass supplies the computed Adler-32 and requires `Z_OK`, exact output
-length, and exact input consumption. A checksum failure alone is never accepted
-as proof of a complete stream. This trades a second decompression pass for
-reuse of the existing portable buffer API without a platform-dependent
-`z_stream` layout. Output allocation is bounded by the declared member size
-and DEFLATE's expansion bound; ZIP's CRC-32 is checked separately.
+The DEFLATE decoder drives the shared `z_inflate_all` streaming inflater
+(`windowBits = -15`, since ZIP stores the raw DEFLATE body). Output is bounded
+by the declared member size plus one byte of headroom; a member is valid only
+when inflate reaches `Z_STREAM_END` having produced exactly the declared size
+and consumed exactly the declared `compress_size` -- trailing bytes inside the
+compressed field are rejected. Integrity comes from the central-directory
+CRC-32 check (verified separately against the decoded bytes), so no
+verification re-decode is needed. The declared size is also pre-checked
+against `z_inflate_bound` (DEFLATE's ~1032x expansion bound).
 
 Scope: archives are loaded into memory, and `read` returns a complete member.
 ZIP64, encryption, other compression methods, writing, streaming member
