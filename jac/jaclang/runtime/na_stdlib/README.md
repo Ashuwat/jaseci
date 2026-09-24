@@ -63,8 +63,8 @@ native layout records the emitted name separately from its source-level key.
   `timezone` pair. `timezone.utc` is a class attribute and `datetime.now` /
   `datetime.fromtimestamp` are class-level constructors, riding the native
   static-method and class-attribute capability added for #6951. The civil date
-  is computed from the POSIX epoch (Hinnant's days->civil) over the `time`
-  intercept, so it is exact for a fixed timestamp; `year`/`month`/`day`/`hour`/
+  is computed from the POSIX epoch (Hinnant's days->civil) over the bundled
+  `time` module, so it is exact for a fixed timestamp; `year`/`month`/`day`/`hour`/
   `minute`/`second`, `weekday()`, and `isoformat()` match CPython. SCOPE: UTC /
   fixed-offset only (no tz database, DST, leap seconds, or microseconds).
 - **`gzip.jac`** (#6978 Phase 2) -- a Mechanism-B gzip framing over the
@@ -434,6 +434,37 @@ native layout records the emitted name separately from its source-level key.
   link against host libm on native and against the vendored musl bitcode on
   wasm.
 
+- **`time.jac`** (Mechanism F surface) + **`_time_common.jac`** (shared
+  `clock_gettime` / `clock_settime` FFI and timespec loads) +
+  **`_time_native.linux.jac`** / **`_time_native.darwin.jac`** (per-OS clock
+  ids and the sleep floor: `clock_nanosleep` on Linux, `nanosleep` on Darwin) -- the clock half of CPython's
+  `time` module, replacing the former Mechanism-A intercept: `time`,
+  `time_ns`, `monotonic`, `monotonic_ns`, `perf_counter`, `perf_counter_ns`,
+  `process_time`, `process_time_ns`, `thread_time`, `thread_time_ns`,
+  `clock_gettime_ns`, `clock_settime_ns`, `sleep`, and the clock-id constants
+  `CLOCK_REALTIME` / `CLOCK_MONOTONIC` / `CLOCK_MONOTONIC_RAW` /
+  `CLOCK_PROCESS_CPUTIME_ID` / `CLOCK_THREAD_CPUTIME_ID` (per-OS values via
+  the floor). `sleep` parks on an absolute `clock_nanosleep(CLOCK_MONOTONIC,
+  TIMER_ABSTIME)` deadline the way CPython's `pysleep` does (a relative
+  `nanosleep` remainder loop on Darwin), retries on `EINTR`, and matches
+  CPython's error behavior: `ValueError("sleep length must be
+  non-negative")` on negative input, `ValueError` on NaN, and
+  `OverflowError("timestamp out of range for platform time_t")` on inputs
+  (including infinities) whose nanoseconds do not fit an i64. Clock
+  failures route through `_errno_native.raise_errno`, so they carry
+  CPython's `[Errno N]` message AND the mapped `OSError` subclass
+  (`PermissionError` for `EPERM`/`EACCES`, ...).
+  SCOPE/divergences: the calendar/`struct_time` family (`localtime`,
+  `gmtime`, `mktime`, `ctime`, `asctime`, `strftime`, `strptime`, `tzset`,
+  `get_clock_info`, `struct_time`, `thread_time` attributes like `tzname`)
+  is out of scope and fails loudly; the float-seconds `clock_gettime`,
+  `clock_getres`, and `clock_settime` are absent because their bare names
+  collide with the floor's C externs in the shared native symbol table --
+  use `clock_gettime_ns` / `clock_settime_ns`; `perf_counter` is
+  `CLOCK_MONOTONIC`, matching CPython on POSIX; `sleep` takes float
+  seconds. Each floor call packs the `timespec` into a 16-byte buffer it
+  allocates for itself, so the module is safe to call from any thread
+  (the native backend spawns real ones). Native-host only.
 - **`sqlite3.jac`** (Mechanism F surface) + **`_sqlite3_native.jac`** (FFI
   floor over the system `libsqlite3`, 3.53.x) -- the DB-API 2.0 core of
   CPython 3.14 `sqlite3`: `connect()` (with the full CPython kwarg set --
@@ -535,9 +566,10 @@ Mechanism B exists to avoid writing twice. Reaching for one through the flat
 
 - **B (here)**: pure-Jac on primitives; portable to every native target
   (ELF/Mach-O/PE/WASM). Preferred. Example: `os/path.jac`.
-- **A**: compiler intrinsics over libm/libc/syscalls (`time`, `os`,
-  `random`, `struct`); native-host only. (`math` moved to Mechanism B, above,
-  over the `_math_native` libm FFI floor.)
+- **A**: compiler intrinsics over libm/libc/syscalls (`os`, `random`,
+  `struct`); native-host only. (`math` moved to Mechanism B, above, over the
+  `_math_native` libm FFI floor; `time` is a bundled Mechanism-F surface over
+  `_time_native`, below.)
 - **F**: thin FFI wrappers over a system C library; native-host only. Examples:
   `_ssl_native.jac` -- the floor the verifying TLS client `ssl` is built on,
   over OpenSSL `libssl`/`libcrypto` (issue #6978 Phase 1); `_socket_native.jac`
