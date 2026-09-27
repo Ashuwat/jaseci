@@ -1332,30 +1332,56 @@ def _stage0_kernel_workdir(pkg_path: Path, artifact_name: str) -> tuple[Path, Pa
     return (target, out);
 }
 
+def _sealed_link_current(out: Path) -> bool {
+    import from jaclang.compiler.backends.native.kernel_resolve {
+        SEALED_LINK_MODE,
+        _sidecar_matches_sources,
+        read_sidecar
+    }
+    sidecar = read_sidecar(str(out));
+    if sidecar is None
+        or not out.is_file()
+        or sidecar.get("link_mode") != SEALED_LINK_MODE {
+        return False;
+    }
+    try {
+        return _sidecar_matches_sources(sidecar);
+    } except Exception {
+        return False;
+    }
+}
+
 def seal_stage0_kernel(
     pkg_path: Path, artifact_path: Path, artifact_rel: str
 ) -> (dict[str, any] | None) {
     import shutil;
     import from jaclang.compiler.backends.native.kernel_resolve {
         LAYOUT_SIDECAR_SUFFIX,
+        PR_KIT_EVENT,
         SEALED_LINK_MODE,
         STAGE0_BUILDER,
-        read_sidecar
+        read_sidecar,
+        seal_link_mode
     }
     import from jaclang.compiler.backends.native.kernel_stage0 { running_kernel_target }
     import from jaclang.compiler.backends.native.stage0_build { build_kernel_by_pin }
     import from jaclang.compiler.driver.jir { get_jir_cache_dir }
     import from jaclang.jac0core.cache_paths { FileLock }
+    link_mode = seal_link_mode();
     lock_path = get_jir_cache_dir() / "stage0-kernel.lock";
     lock_path.parent.mkdir(parents=True, exist_ok=True);
     lock = FileLock(str(lock_path), timeout=7200.0);
     lock.acquire();
     try {
         (target, out) = _stage0_kernel_workdir(pkg_path, artifact_path.name);
+        if link_mode != SEALED_LINK_MODE and _sealed_link_current(out) {
+            console.print(
+                "  Kernel: the cached bitcode link matches these units; reusing it"
+            );
+            link_mode = SEALED_LINK_MODE;
+        }
         if not build_kernel_by_pin(
-            str(out),
-            spec=running_kernel_target(str(target)),
-            link_mode=SEALED_LINK_MODE
+            str(out), spec=running_kernel_target(str(target)), link_mode=link_mode
         ) {
             return None;
         }
@@ -1370,10 +1396,10 @@ def seal_stage0_kernel(
         raise RuntimeError("the stage-0 kernel build left no layout sidecar");
     }
     mode = str(sidecar.get("link_mode", ""));
-    if mode != SEALED_LINK_MODE {
+    if mode != link_mode {
         raise RuntimeError(
-            f"stage 0 linked the kernel in {mode or 'an unrecorded'} mode; a sealed "
-            f"kernel is a {SEALED_LINK_MODE} link"
+            f"stage 0 linked the kernel in {mode or 'an unrecorded'} mode; this "
+            f"seal asked for a {link_mode} link"
         );
     }
     stage0 = sidecar.get("stage0");
@@ -1390,10 +1416,13 @@ def seal_stage0_kernel(
         "builder": STAGE0_BUILDER,
         "stage0": dict(stage0)
     };
+    if mode != SEALED_LINK_MODE {
+        record["kit"] = PR_KIT_EVENT;
+    }
     console.print(
         f"  Native artifact: {artifact_rel} built by stage 0 "
-        f"{str(stage0.get('commit', ''))[:12]} (plan {record['plan_digest'][:12]}, "
-        f"layout {record['layout_digest'][:12]})"
+        f"{str(stage0.get('commit', ''))[:12]} ({mode} link, plan "
+        f"{record['plan_digest'][:12]}, layout {record['layout_digest'][:12]})"
     );
     return {"units": {}, "artifact": record};
 }
