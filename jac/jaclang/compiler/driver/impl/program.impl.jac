@@ -672,6 +672,28 @@ impl JacProgram.stamp_app_facts(self: JacProgram, mod: uni.Module) -> None {
         app = ws.apps.get(opts.target_app);
     }
     mod.app = app.name if app is not None else None;
+    mod.persistence = [];
+    if mod_path {
+        import os;
+        import from jaclang.compiler.placement.placement_pins { module_dot_path }
+        if ws is not None {
+            mod.persistence = [
+                ws.persistence_namespace,
+                module_dot_path(mod_path, ws.project_root)
+            ];
+        } else {
+            entry_path = opts.entry_point or mod_path;
+            source_root = opts.project_root or os.path.dirname(entry_path);
+            if os.path.realpath(mod_path).startswith(
+                os.path.realpath(source_root) + os.sep
+            ) {
+                mod.persistence = [
+                    host.path_facts(entry_path).module_stem,
+                    module_dot_path(mod_path, source_root)
+                ];
+            }
+        }
+    }
     mod.app_root = ws.project_root if (app is not None and ws is not None) else None;
     target_kind = opts.app_kind if (opts is not None and opts.app_kind) else '';
     if app is not None {
