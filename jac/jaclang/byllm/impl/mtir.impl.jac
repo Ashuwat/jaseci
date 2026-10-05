@@ -319,11 +319,14 @@ impl MTRuntime.parse_response(response: str) -> any {
         } except OutputConversionError {
             raise;
         } except Exception as e {
+            target_type = str(self.resp_type)
+                if get_origin(self.resp_type) is not None
+                else getattr(self.resp_type, "__name__", str(self.resp_type));
             err = OutputConversionError(
-                f"Failed to convert LLM output to '{self.resp_type.__name__}': {e}"
+                f"Failed to convert LLM output to '{target_type}': {e}"
             );
             setattr(err, "raw_output", response);
-            raise err;
+            raise err from e;
         }
     }
     return response;

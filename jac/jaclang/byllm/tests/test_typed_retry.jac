@@ -86,6 +86,25 @@ test "retries are bounded, and the error reports how many were spent" {
 }
 
 
+test "union conversion failures use the typed retry path" {
+    llm = MockLLM(outputs=[say("nope") for _ in range(4)]);
+
+    def maybe_age -> int | None by llm();
+
+    err: any = None;
+    try {
+        maybe_age();
+    } except Exception as e {
+        err = e;
+    }
+    assert type(err).__name__ == "OutputConversionError" , (
+        f"expected OutputConversionError, got {err!r}"
+    );
+    assert len(llm.seen) == 4 , f"expected three retries, got {len(llm.seen) - 1}";
+    assert str(int | None) in str(err) , f"error should name the union, got: {err}";
+}
+
+
 test "only a conversion failure is retried" {
     # A ValueError from the model is not a parse problem, so it propagates on
     # the first attempt rather than burning the retry budget.

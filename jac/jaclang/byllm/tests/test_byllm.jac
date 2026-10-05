@@ -305,6 +305,23 @@ test "parse_response passes through str returns and valid typed json" {
     assert (person.name, person.age) == ("Alice", 30) , f"got {person}";
 }
 
+test "parse_response reports union targets without masking conversion errors" {
+    raw = "not json";
+    targets: list[any] = [int | None, int | float | bool];
+    for target in targets {
+        err: any = None;
+        try {
+            mk_run(resp_type=target).parse_response(raw);
+        } except OutputConversionError as e {
+            err = e;
+        }
+        assert err is not None , f"{target}: expected OutputConversionError";
+        assert str(target) in str(err) , f"error should name {target}, got: {err}";
+        assert err.raw_output == raw , f"{target}: raw output was not preserved";
+        assert err.__cause__ is not None , f"{target}: conversion cause was not chained";
+    }
+}
+
 test "bare container return types are a configuration error" {
     for bare in [list, dict] {
         raised = False;
